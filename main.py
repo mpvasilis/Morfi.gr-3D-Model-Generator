@@ -250,13 +250,13 @@ class PhotogrammetryAutomator:
                     new_exposure_info = self.analyze_image_exposure(output_file)
                     result['brightness_after'] = new_exposure_info['mean_brightness']
                     
-                    self.safe_log('info', f"✅ Thread {task_id}: Corrected {image_file.name} ({exposure_info['mean_brightness']:.1f}% → {new_exposure_info['mean_brightness']:.1f}%)")
+                    self.safe_log('info', f"[OK] Thread {task_id}: Corrected {image_file.name} ({exposure_info['mean_brightness']:.1f}% -> {new_exposure_info['mean_brightness']:.1f}%)")
                 else:
                     # Copy original if correction failed
                     if not output_file.exists():
                         shutil.copy2(image_file, output_file)
                     result['success'] = True  # Still successful, just not corrected
-                    self.safe_log('error', f"❌ Thread {task_id}: Failed to correct {image_file.name}, using original")
+                    self.safe_log('error', f"[FAIL] Thread {task_id}: Failed to correct {image_file.name}, using original")
             else:
                 # Image is not overexposed, just copy
                 if not output_file.exists():
@@ -264,14 +264,14 @@ class PhotogrammetryAutomator:
                 result['success'] = True
                 
         except Exception as e:
-            self.safe_log('error', f"❌ Thread {task_id}: Error processing {image_file.name}: {e}")
+            self.safe_log('error', f"[ERROR] Thread {task_id}: Error processing {image_file.name}: {e}")
             # Try to copy original as fallback
             try:
                 if not output_file.exists():
                     shutil.copy2(image_file, output_file)
                 result['success'] = True
             except Exception as copy_error:
-                self.safe_log('error', f"❌ Thread {task_id}: Failed to copy {image_file.name}: {copy_error}")
+                self.safe_log('error', f"[ERROR] Thread {task_id}: Failed to copy {image_file.name}: {copy_error}")
         
         return result
     def correct_image_exposure(self, input_path: Path, output_path: Path, adjustment: float = None) -> bool:
@@ -582,14 +582,14 @@ class PhotogrammetryAutomator:
             is_ready, image_count = self.check_directory_ready(directory)
             
             if is_ready:
-                self.logger.info(f"✅ Directory {item['name']} now has {image_count} images - ready for processing!")
+                self.logger.info(f"[READY] Directory {item['name']} now has {image_count} images - ready for processing!")
                 ready_directories.append(directory)
                 
                 # Remove from checkpoint queued list
                 if 'queued' in self.checkpoint_data and item['name'] in self.checkpoint_data['queued']:
                     self.checkpoint_data['queued'].remove(item['name'])
             else:
-                self.logger.info(f"⏳ Directory {item['name']} still has only {image_count} images (check #{item['check_count']})")
+                self.logger.info(f"[PENDING] Directory {item['name']} still has only {image_count} images (check #{item['check_count']})")
                 item['last_check'] = datetime.now().isoformat()
                 item['check_count'] += 1
                 still_pending.append(item)
@@ -707,9 +707,9 @@ class PhotogrammetryAutomator:
                 textured_obj_file = output_path / f"{photo_dir.name}_textured.obj"
                 
                 if obj_file.exists():
-                    self.logger.info(f"✅ Model exported: {obj_file.name}")
+                    self.logger.info(f"[SUCCESS] Model exported: {obj_file.name}")
                 if textured_obj_file.exists():
-                    self.logger.info(f"✅ Textured model exported: {textured_obj_file.name}")
+                    self.logger.info(f"[SUCCESS] Textured model exported: {textured_obj_file.name}")
                 
                 return True
             else:
@@ -792,9 +792,9 @@ class PhotogrammetryAutomator:
                 textured_obj_file = output_path / f"{photo_dir.name}_textured.obj"
                 
                 if obj_file.exists():
-                    self.logger.info(f"✅ Model exported: {obj_file.name}")
+                    self.logger.info(f"[SUCCESS] Model exported: {obj_file.name}")
                 if textured_obj_file.exists():
-                    self.logger.info(f"✅ Textured model exported: {textured_obj_file.name}")
+                    self.logger.info(f"[SUCCESS] Textured model exported: {textured_obj_file.name}")
                 
                 return True
             else:
@@ -854,10 +854,10 @@ class PhotogrammetryAutomator:
         # Update checkpoint
         if success:
             self.checkpoint_data['processed'].append(dir_name)
-            self.logger.info(f"✅ Successfully processed {dir_name}")
+            self.logger.info(f"[SUCCESS] Successfully processed {dir_name}")
         else:
             self.checkpoint_data['failed'].append(dir_name)
-            self.logger.error(f"❌ Failed to process {dir_name}")
+            self.logger.error(f"[FAILED] Failed to process {dir_name}")
         
         self.save_checkpoint()
         return success
