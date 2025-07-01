@@ -808,15 +808,7 @@ class PhotogrammetryUI:
             elif directory_name in pending_dirs:
                 return "pending", pending_dirs[directory_name]
             else:
-                # Check legacy checkpoint
-                if directory_name in self.checkpoint_data.get('processed', []):
-                    return "completed", None
-                elif directory_name in self.checkpoint_data.get('failed', []):
-                    return "failed", None
-                elif directory_name in self.checkpoint_data.get('queued', []):
-                    return "queued", None
-                else:
-                    return "not_processed", None
+                return "not_processed", None
                     
         except Exception as e:
             print(f"Error getting directory status: {e}")
