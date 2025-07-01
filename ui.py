@@ -166,6 +166,9 @@ class PhotogrammetryUI:
         self.checkpoint_file_var = ctk.StringVar(value="processing_checkpoint.json")
         self.database_file_var = ctk.StringVar(value="processing_database.db")
         
+        # Add trace to min_images_var to refresh status when changed
+        self.min_images_var.trace("w", self.on_min_images_changed)
+        
         row = 0
         
         # Input Directory
@@ -322,7 +325,7 @@ class PhotogrammetryUI:
         preview_frame = ctk.CTkFrame(parent)
         preview_frame.grid(row=0, column=1, sticky="nsew", padx=10)
         preview_frame.grid_columnconfigure(0, weight=1)
-        preview_frame.grid_rowconfigure(3, weight=1)
+        preview_frame.grid_rowconfigure(4, weight=1)
         
         # Title
         ctk.CTkLabel(
@@ -348,7 +351,7 @@ class PhotogrammetryUI:
         refresh_btn = ctk.CTkButton(
             dir_select_frame,
             text="Refresh",
-            command=self.refresh_preview_directories,
+            command=self.refresh_all_preview_data,
             width=80
         )
         refresh_btn.grid(row=0, column=1, padx=5, pady=5)
@@ -364,14 +367,31 @@ class PhotogrammetryUI:
         )
         self.photo_info_label.grid(row=0, column=0, pady=5)
         
+        # Directory Status Overview
+        status_overview_frame = ctk.CTkFrame(preview_frame)
+        status_overview_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=5)
+        status_overview_frame.grid_columnconfigure(0, weight=1)
+        
+        ctk.CTkLabel(
+            status_overview_frame,
+            text="Directory Status Overview",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).grid(row=0, column=0, pady=5)
+        
+        # Directory list with status
+        self.directory_status_frame = ctk.CTkScrollableFrame(status_overview_frame, height=200)
+        self.directory_status_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=5)
+        self.directory_status_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        
         # Photo thumbnails container
         self.thumbnails_frame = ctk.CTkScrollableFrame(preview_frame, label_text="Photos")
-        self.thumbnails_frame.grid(row=3, column=0, sticky="nsew", padx=10, pady=5)
+        self.thumbnails_frame.grid(row=4, column=0, sticky="nsew", padx=10, pady=5)
         self.thumbnails_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
         
         # Initialize photo data
         self.current_photos = []
         self.photo_thumbnails = []
+        self.directory_status_widgets = []
         
     def setup_control_panel(self, parent):
         """Setup the control and logging panel"""
@@ -560,6 +580,13 @@ class PhotogrammetryUI:
         value = self.exposure_adjustment_var.get()
         self.exposure_label.configure(text=f"{value:.1f} stops")
     
+    def on_min_images_changed(self, *args):
+        """Handle change in minimum images setting"""
+        try:
+            self.refresh_directory_status()
+        except Exception:
+            pass  # May fail if UI not fully initialized
+    
     def get_image_files(self, directory):
         """Get image files from directory"""
         image_extensions = {'.jpg', '.jpeg', '.png', '.tiff', '.tif', '.bmp', '.raw', '.cr2', '.nef', '.arw'}
@@ -582,6 +609,7 @@ class PhotogrammetryUI:
         
         if not input_dir or not Path(input_dir).exists():
             self.preview_dir_combo.configure(values=["No input directory set"])
+            self.clear_directory_status()
             return
         
         try:
@@ -603,10 +631,18 @@ class PhotogrammetryUI:
             else:
                 self.preview_dir_combo.configure(values=["No directories with images found"])
                 self.clear_photo_preview()
+            
+            # Update directory status overview
+            self.refresh_directory_status()
                 
         except Exception as e:
             self.preview_dir_combo.configure(values=["Error reading directories"])
             print(f"Error refreshing directories: {e}")
+    
+    def refresh_all_preview_data(self):
+        """Refresh both directory list and status overview"""
+        self.refresh_preview_directories()
+        # Status is already refreshed in refresh_preview_directories
     
     def on_preview_dir_selected(self, selected_dir):
         """Handle directory selection for preview"""
@@ -750,6 +786,195 @@ class PhotogrammetryUI:
                 
         except Exception as e:
             messagebox.showerror("Error", f"Could not display image: {str(e)}")
+    
+    def get_directory_status(self, directory_name):
+        """Get the processing status of a directory"""
+        try:
+            from database import ProcessingDatabase
+            db = ProcessingDatabase(self.database_file_var.get())
+            
+            # Check database first
+            completed_dirs = {d['name']: d for d in db.get_completed_directories()}
+            failed_dirs = {d['name']: d for d in db.get_failed_directories()}
+            queued_dirs = {d['name']: d for d in db.get_queued_directories()}
+            pending_dirs = {d['name']: d for d in db.get_pending_directories()}
+            
+            if directory_name in completed_dirs:
+                return "completed", completed_dirs[directory_name]
+            elif directory_name in failed_dirs:
+                return "failed", failed_dirs[directory_name]
+            elif directory_name in queued_dirs:
+                return "queued", queued_dirs[directory_name]
+            elif directory_name in pending_dirs:
+                return "pending", pending_dirs[directory_name]
+            else:
+                # Check legacy checkpoint
+                if directory_name in self.checkpoint_data.get('processed', []):
+                    return "completed", None
+                elif directory_name in self.checkpoint_data.get('failed', []):
+                    return "failed", None
+                elif directory_name in self.checkpoint_data.get('queued', []):
+                    return "queued", None
+                else:
+                    return "not_processed", None
+                    
+        except Exception as e:
+            print(f"Error getting directory status: {e}")
+            return "unknown", None
+    
+    def get_status_color_and_text(self, status):
+        """Get color and display text for status"""
+        status_info = {
+            "completed": ("green", "✓ Completed", "Successfully processed"),
+            "failed": ("red", "✗ Failed", "Processing failed"),
+            "queued": ("orange", "⏳ Queued", "Waiting for more images"),
+            "pending": ("blue", "⏸ Pending", "Ready to process"),
+            "not_processed": ("gray", "○ Not Processed", "New directory"),
+            "unknown": ("gray", "? Unknown", "Status unknown")
+        }
+        return status_info.get(status, status_info["unknown"])
+    
+    def clear_directory_status(self):
+        """Clear the directory status display"""
+        for widget in self.directory_status_frame.winfo_children():
+            widget.destroy()
+        self.directory_status_widgets = []
+    
+    def refresh_directory_status(self):
+        """Refresh the directory status overview"""
+        try:
+            self.clear_directory_status()
+            
+            input_dir = self.input_dir_var.get()
+            if not input_dir or not Path(input_dir).exists():
+                return
+            
+            input_path = Path(input_dir)
+            directories_with_images = []
+            
+            # Scan all directories with images
+            for item in input_path.iterdir():
+                if item.is_dir():
+                    image_files = self.get_image_files(item)
+                    if image_files:
+                        directories_with_images.append((item.name, len(image_files)))
+            
+            if not directories_with_images:
+                no_dirs_label = ctk.CTkLabel(
+                    self.directory_status_frame,
+                    text="No directories with images found",
+                    font=ctk.CTkFont(size=12)
+                )
+                no_dirs_label.grid(row=0, column=0, columnspan=3, pady=10)
+                return
+            
+            # Sort directories by name
+            directories_with_images.sort(key=lambda x: x[0])
+            
+            # Create header
+            header_frame = ctk.CTkFrame(self.directory_status_frame)
+            header_frame.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 5))
+            header_frame.grid_columnconfigure((0, 1, 2), weight=1)
+            
+            ctk.CTkLabel(header_frame, text="Directory", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, padx=5)
+            ctk.CTkLabel(header_frame, text="Status", font=ctk.CTkFont(weight="bold")).grid(row=0, column=1, padx=5)
+            ctk.CTkLabel(header_frame, text="Images", font=ctk.CTkFont(weight="bold")).grid(row=0, column=2, padx=5)
+            
+            # Add directory rows
+            for i, (dir_name, image_count) in enumerate(directories_with_images, 1):
+                status, status_data = self.get_directory_status(dir_name)
+                color, status_text, tooltip = self.get_status_color_and_text(status)
+                
+                # Directory row frame
+                row_frame = ctk.CTkFrame(self.directory_status_frame)
+                row_frame.grid(row=i, column=0, columnspan=3, sticky="ew", pady=1, padx=2)
+                row_frame.grid_columnconfigure((0, 1, 2), weight=1)
+                
+                # Make row clickable
+                def on_directory_click(dir_name=dir_name):
+                    self.preview_dir_var.set(dir_name)
+                    self.on_preview_dir_selected(dir_name)
+                
+                # Directory name (clickable)
+                dir_label = ctk.CTkLabel(
+                    row_frame,
+                    text=dir_name[:20] + "..." if len(dir_name) > 20 else dir_name,
+                    font=ctk.CTkFont(size=11),
+                    cursor="hand2"
+                )
+                dir_label.grid(row=0, column=0, padx=5, pady=3, sticky="w")
+                dir_label.bind("<Button-1>", lambda e, d=dir_name: on_directory_click(d))
+                
+                # Status with color
+                status_label = ctk.CTkLabel(
+                    row_frame,
+                    text=status_text,
+                    font=ctk.CTkFont(size=11),
+                    text_color=color
+                )
+                status_label.grid(row=0, column=1, padx=5, pady=3)
+                
+                # Image count with minimum requirement check
+                min_images = self.min_images_var.get()
+                count_text = f"{image_count}"
+                count_color = "green" if image_count >= min_images else "orange"
+                
+                if image_count < min_images:
+                    count_text += f" (need {min_images})"
+                
+                count_label = ctk.CTkLabel(
+                    row_frame,
+                    text=count_text,
+                    font=ctk.CTkFont(size=11),
+                    text_color=count_color
+                )
+                count_label.grid(row=0, column=2, padx=5, pady=3)
+                
+                # Store references
+                self.directory_status_widgets.append((row_frame, dir_label, status_label, count_label))
+                
+                # Add processing info if available
+                if status_data and status in ["completed", "failed"]:
+                    if status_data.get('processed_at'):
+                        try:
+                            from datetime import datetime
+                            processed_time = datetime.fromisoformat(status_data['processed_at'].replace('Z', '+00:00'))
+                            time_str = processed_time.strftime("%m/%d %H:%M")
+                            dir_label.configure(text=f"{dir_label.cget('text')} ({time_str})")
+                        except:
+                            pass
+            
+            # Add summary at bottom
+            summary_frame = ctk.CTkFrame(self.directory_status_frame)
+            summary_frame.grid(row=len(directories_with_images) + 2, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+            
+            # Count by status
+            status_counts = {"completed": 0, "failed": 0, "queued": 0, "pending": 0, "not_processed": 0}
+            for dir_name, _ in directories_with_images:
+                status, _ = self.get_directory_status(dir_name)
+                status_counts[status] = status_counts.get(status, 0) + 1
+            
+            summary_text = f"Total: {len(directories_with_images)} | "
+            summary_text += f"✓{status_counts['completed']} ✗{status_counts['failed']} "
+            summary_text += f"⏳{status_counts['queued']} ⏸{status_counts['pending']} "
+            summary_text += f"○{status_counts['not_processed']}"
+            
+            summary_label = ctk.CTkLabel(
+                summary_frame,
+                text=summary_text,
+                font=ctk.CTkFont(size=11, weight="bold")
+            )
+            summary_label.grid(row=0, column=0, pady=5)
+            
+        except Exception as e:
+            print(f"Error refreshing directory status: {e}")
+            error_label = ctk.CTkLabel(
+                self.directory_status_frame,
+                text=f"Error loading directory status: {str(e)}",
+                font=ctk.CTkFont(size=11),
+                text_color="red"
+            )
+            error_label.grid(row=0, column=0, columnspan=3, pady=10)
         
     def validate_settings(self):
         """Validate current settings"""
@@ -869,9 +1094,10 @@ class PhotogrammetryUI:
         self.status_label.configure(text="Ready")
         self.progress_bar.set(0)
         
-        # Refresh database stats after processing
+        # Refresh database stats and directory status after processing
         try:
             self.refresh_database_stats()
+            self.refresh_directory_status()
         except Exception:
             pass
         

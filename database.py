@@ -26,7 +26,7 @@ class ProcessingDatabase:
     def _init_database(self):
         """Initialize database tables"""
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite3.connect(self.db_path, timeout=10.0) as conn:
                 cursor = conn.cursor()
                 
                 # Create directories table
@@ -86,7 +86,7 @@ class ProcessingDatabase:
             Directory ID
         """
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite3.connect(self.db_path, timeout=10.0) as conn:
                 cursor = conn.cursor()
                 
                 # Check if directory already exists
@@ -137,7 +137,7 @@ class ProcessingDatabase:
             has_exposure_correction: Whether exposure correction was applied
         """
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite3.connect(self.db_path, timeout=10.0) as conn:
                 cursor = conn.cursor()
                 
                 processed_at = datetime.now().isoformat() if status == 'completed' else None
@@ -171,7 +171,7 @@ class ProcessingDatabase:
     def add_log_entry(self, directory_id: int, action: str, message: str = None):
         """Add a log entry for a directory"""
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite3.connect(self.db_path, timeout=10.0) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO processing_log (directory_id, action, message)
@@ -180,7 +180,8 @@ class ProcessingDatabase:
                 conn.commit()
                 
         except Exception as e:
-            self.logger.error(f"Failed to add log entry: {e}")
+            # Don't log database errors to avoid recursion
+            pass
     
     def get_directories_by_status(self, status: str) -> List[Dict]:
         """
@@ -193,7 +194,7 @@ class ProcessingDatabase:
             List of directory dictionaries
         """
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite3.connect(self.db_path, timeout=10.0) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT id, name, full_path, status, image_count, created_at, 
@@ -233,7 +234,7 @@ class ProcessingDatabase:
     def get_processing_stats(self) -> Dict:
         """Get overall processing statistics"""
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite3.connect(self.db_path, timeout=10.0) as conn:
                 cursor = conn.cursor()
                 
                 # Get counts by status
@@ -294,7 +295,7 @@ class ProcessingDatabase:
             directory_names: Specific directories to reset, or None for all 'processing' status
         """
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite3.connect(self.db_path, timeout=10.0) as conn:
                 cursor = conn.cursor()
                 
                 if directory_names:
@@ -324,7 +325,7 @@ class ProcessingDatabase:
     def get_directory_history(self, name: str) -> List[Dict]:
         """Get processing history for a specific directory"""
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite3.connect(self.db_path, timeout=10.0) as conn:
                 cursor = conn.cursor()
                 
                 # Get directory ID
@@ -353,7 +354,7 @@ class ProcessingDatabase:
     def cleanup_old_entries(self, days_old: int = 30):
         """Remove entries older than specified days for completed/failed directories"""
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite3.connect(self.db_path, timeout=10.0) as conn:
                 cursor = conn.cursor()
                 
                 # Remove old completed/failed directories
@@ -378,7 +379,7 @@ class ProcessingDatabase:
         try:
             import json
             
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite3.connect(self.db_path, timeout=10.0) as conn:
                 cursor = conn.cursor()
                 
                 # Get all directories
