@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""
-3D Model Creation Automation Script for RealityCapture and RealityScan
-Processes directories containing 3D scanner photos and creates 3D models
-Includes automatic exposure correction using ImageMagick
-Updated with official CLI commands (2024/2025)
-"""
-
 import os
 import sys
 import json
@@ -401,6 +394,8 @@ class PhotogrammetryAutomator:
         self.logger.info(f"Starting parallel exposure correction for {dir_name} using {self.max_workers} threads")
         
         # Create corrected images directory
+        # Note: _corrected directories are filtered out from UI and discovery to avoid confusion
+        # They are internal processing artifacts used only by the exposure correction workflow
         if self.keep_originals:
             corrected_dir = photo_dir.parent / f"{dir_name}_corrected"
             corrected_dir.mkdir(exist_ok=True)
@@ -676,6 +671,10 @@ class PhotogrammetryAutomator:
         
         for item in self.input_dir.iterdir():
             if item.is_dir():
+                # Skip exposure correction folders (they are internal processing artifacts)
+                if item.name.endswith('_corrected'):
+                    continue
+                
                 # Check if directory contains image files
                 image_extensions = {'.jpg', '.jpeg', '.png', '.tiff', '.bmp', '.raw'}
                 has_images = any(
@@ -822,8 +821,7 @@ class PhotogrammetryAutomator:
             # Create RealityScan project file path
             project_file = output_path / f"{photo_dir.name}.rsproj"
             
-            # RealityScan CLI commands based on official documentation
-            # RealityScan uses similar commands to RealityCapture but with different file extensions
+            # RealityScan CLI commands - corrected workflow for texture calculation
             commands = [
                 f'"{self.software_exe}"',
                 '-headless',  # Run without UI for automation  
@@ -833,9 +831,11 @@ class PhotogrammetryAutomator:
                 '-selectMaximalComponent',  # Select largest component
                 '-setReconstructionRegionAuto',  # Set reconstruction region automatically
                 '-calculateNormalModel',  # Calculate 3D model
-                f'-exportModel "Model 1" "{output_path / (photo_dir.name + ".obj")}"',
-                '-calculateTexture',  # Calculate texture
-                f'-exportModel "Model 1" "{output_path / (photo_dir.name + "_textured.obj")}"',
+                f'-save "{project_file}"',  # Save after model calculation
+                f'-exportSelectedModel "{output_path / (photo_dir.name + ".obj")}" -exportFormat obj',
+                '-calculateTexture',  # Calculate texture - must be done after model export
+                f'-save "{project_file}"',  # Save after texture calculation
+                f'-exportSelectedModel "{output_path / (photo_dir.name + "_textured.obj")}" -exportFormat obj -exportTexture',
                 f'-save "{project_file}"',
                 '-quit'
             ]
@@ -866,6 +866,14 @@ class PhotogrammetryAutomator:
                     self.logger.info(f"[SUCCESS] Model exported: {obj_file.name}")
                 if textured_obj_file.exists():
                     self.logger.info(f"[SUCCESS] Textured model exported: {textured_obj_file.name}")
+                else:
+                    self.logger.warning(f"[WARNING] Textured model not found: {textured_obj_file.name}")
+                    # Check for texture files that might have been created
+                    texture_files = list(output_path.glob(f"{photo_dir.name}*.jpg")) + \
+                                   list(output_path.glob(f"{photo_dir.name}*.png")) + \
+                                   list(output_path.glob(f"{photo_dir.name}*.mtl"))
+                    if texture_files:
+                        self.logger.info(f"[INFO] Found texture files: {[f.name for f in texture_files]}")
                 
                 return True
             else:

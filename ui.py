@@ -2,6 +2,9 @@
 """
 Modern GUI for 3D Model Creation Automation Script
 Provides a user-friendly interface for RealityCapture and RealityScan automation
+
+Note: Directories ending with "_corrected" are automatically filtered out from the UI
+as they are internal artifacts created by the exposure correction workflow.
 """
 
 import customtkinter as ctk
@@ -618,6 +621,10 @@ class PhotogrammetryUI:
             
             for item in input_path.iterdir():
                 if item.is_dir():
+                    # Skip exposure correction folders (they are internal processing artifacts)
+                    if item.name.endswith('_corrected'):
+                        continue
+                        
                     # Check if directory contains images
                     image_files = self.get_image_files(item)
                     if image_files:
@@ -847,6 +854,10 @@ class PhotogrammetryUI:
             # Scan all directories with images
             for item in input_path.iterdir():
                 if item.is_dir():
+                    # Skip exposure correction folders (they are internal processing artifacts)
+                    if item.name.endswith('_corrected'):
+                        continue
+                        
                     image_files = self.get_image_files(item)
                     if image_files:
                         directories_with_images.append((item.name, len(image_files)))
