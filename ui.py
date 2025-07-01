@@ -15,6 +15,8 @@ import json
 from pathlib import Path
 import logging
 from datetime import datetime
+from PIL import Image, ImageTk
+import math
 
 # Import our main automation class
 from main import PhotogrammetryAutomator
@@ -36,8 +38,9 @@ class LogHandler(logging.Handler):
 class PhotogrammetryUI:
     def __init__(self):
         self.root = ctk.CTk()
-        self.root.title("3D Model Generator - RealityCapture & RealityScan Automation")
-        self.root.geometry("1200x800")
+        self.root.title("Morfi.gr - 3D Model Generator")
+        self.root.geometry("1600x900")
+        self.root.minsize(1400, 800)
         
         # Initialize variables
         self.automator = None
@@ -130,11 +133,14 @@ class PhotogrammetryUI:
         # Main container
         main_frame = ctk.CTkFrame(self.root)
         main_frame.grid(row=1, column=0, pady=(0, 20), padx=20, sticky="nsew")
-        main_frame.grid_columnconfigure(1, weight=1)
+        main_frame.grid_columnconfigure((0, 1, 2), weight=1)
         main_frame.grid_rowconfigure(0, weight=1)
         
         # Left panel for settings
         self.setup_settings_panel(main_frame)
+        
+        # Middle panel for photo preview
+        self.setup_preview_panel(main_frame)
         
         # Right panel for logs and controls
         self.setup_control_panel(main_frame)
@@ -311,10 +317,66 @@ class PhotogrammetryUI:
             command=self.save_settings
         ).grid(row=row, column=0, columnspan=2, pady=20)
         
+    def setup_preview_panel(self, parent):
+        """Setup the photo preview panel"""
+        preview_frame = ctk.CTkFrame(parent)
+        preview_frame.grid(row=0, column=1, sticky="nsew", padx=10)
+        preview_frame.grid_columnconfigure(0, weight=1)
+        preview_frame.grid_rowconfigure(3, weight=1)
+        
+        # Title
+        ctk.CTkLabel(
+            preview_frame, 
+            text="Photo Preview", 
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).grid(row=0, column=0, pady=10, sticky="ew")
+        
+        # Directory selection
+        dir_select_frame = ctk.CTkFrame(preview_frame)
+        dir_select_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
+        dir_select_frame.grid_columnconfigure(0, weight=1)
+        
+        self.preview_dir_var = ctk.StringVar()
+        self.preview_dir_combo = ctk.CTkComboBox(
+            dir_select_frame,
+            values=["No directories found"],
+            variable=self.preview_dir_var,
+            command=self.on_preview_dir_selected
+        )
+        self.preview_dir_combo.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
+        
+        refresh_btn = ctk.CTkButton(
+            dir_select_frame,
+            text="Refresh",
+            command=self.refresh_preview_directories,
+            width=80
+        )
+        refresh_btn.grid(row=0, column=1, padx=5, pady=5)
+        
+        # Photo info display
+        info_frame = ctk.CTkFrame(preview_frame)
+        info_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=5)
+        
+        self.photo_info_label = ctk.CTkLabel(
+            info_frame,
+            text="Select a directory to preview photos",
+            font=ctk.CTkFont(size=12)
+        )
+        self.photo_info_label.grid(row=0, column=0, pady=5)
+        
+        # Photo thumbnails container
+        self.thumbnails_frame = ctk.CTkScrollableFrame(preview_frame, label_text="Photos")
+        self.thumbnails_frame.grid(row=3, column=0, sticky="nsew", padx=10, pady=5)
+        self.thumbnails_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
+        
+        # Initialize photo data
+        self.current_photos = []
+        self.photo_thumbnails = []
+        
     def setup_control_panel(self, parent):
         """Setup the control and logging panel"""
         control_frame = ctk.CTkFrame(parent)
-        control_frame.grid(row=0, column=1, sticky="nsew")
+        control_frame.grid(row=0, column=2, sticky="nsew")
         control_frame.grid_columnconfigure(0, weight=1)
         control_frame.grid_rowconfigure(1, weight=1)
         
@@ -456,11 +518,17 @@ class PhotogrammetryUI:
         except Exception:
             pass  # Database might not exist yet
         
+        # Refresh preview directories on startup
+        if self.input_dir_var.get():
+            self.refresh_preview_directories()
+        
     def browse_input_dir(self):
         """Browse for input directory"""
         directory = filedialog.askdirectory(title="Select Input Directory")
         if directory:
             self.input_dir_var.set(directory)
+            # Refresh preview directories when input directory changes
+            self.refresh_preview_directories()
             
     def browse_output_dir(self):
         """Browse for output directory"""
@@ -491,6 +559,197 @@ class PhotogrammetryUI:
         """Update exposure adjustment label"""
         value = self.exposure_adjustment_var.get()
         self.exposure_label.configure(text=f"{value:.1f} stops")
+    
+    def get_image_files(self, directory):
+        """Get image files from directory"""
+        image_extensions = {'.jpg', '.jpeg', '.png', '.tiff', '.tif', '.bmp', '.raw', '.cr2', '.nef', '.arw'}
+        image_files = []
+        
+        try:
+            directory_path = Path(directory)
+            if directory_path.exists() and directory_path.is_dir():
+                for file in directory_path.iterdir():
+                    if file.is_file() and file.suffix.lower() in image_extensions:
+                        image_files.append(file)
+        except Exception as e:
+            print(f"Error reading directory {directory}: {e}")
+        
+        return sorted(image_files)
+    
+    def refresh_preview_directories(self):
+        """Refresh the list of available directories for preview"""
+        input_dir = self.input_dir_var.get()
+        
+        if not input_dir or not Path(input_dir).exists():
+            self.preview_dir_combo.configure(values=["No input directory set"])
+            return
+        
+        try:
+            directories = []
+            input_path = Path(input_dir)
+            
+            for item in input_path.iterdir():
+                if item.is_dir():
+                    # Check if directory contains images
+                    image_files = self.get_image_files(item)
+                    if image_files:
+                        directories.append(item.name)
+            
+            if directories:
+                self.preview_dir_combo.configure(values=directories)
+                if directories:
+                    self.preview_dir_var.set(directories[0])
+                    self.on_preview_dir_selected(directories[0])
+            else:
+                self.preview_dir_combo.configure(values=["No directories with images found"])
+                self.clear_photo_preview()
+                
+        except Exception as e:
+            self.preview_dir_combo.configure(values=["Error reading directories"])
+            print(f"Error refreshing directories: {e}")
+    
+    def on_preview_dir_selected(self, selected_dir):
+        """Handle directory selection for preview"""
+        if not selected_dir or selected_dir in ["No directories found", "No input directory set", "Error reading directories"]:
+            self.clear_photo_preview()
+            return
+        
+        input_dir = self.input_dir_var.get()
+        if not input_dir:
+            return
+        
+        directory_path = Path(input_dir) / selected_dir
+        self.load_photo_preview(directory_path)
+    
+    def clear_photo_preview(self):
+        """Clear the photo preview area"""
+        # Clear existing thumbnails
+        for widget in self.thumbnails_frame.winfo_children():
+            widget.destroy()
+        
+        self.current_photos = []
+        self.photo_thumbnails = []
+        self.photo_info_label.configure(text="No photos to display")
+    
+    def load_photo_preview(self, directory_path):
+        """Load and display photo thumbnails"""
+        try:
+            # Clear existing preview
+            self.clear_photo_preview()
+            
+            # Get image files
+            image_files = self.get_image_files(directory_path)
+            
+            if not image_files:
+                self.photo_info_label.configure(text="No images found in selected directory")
+                return
+            
+            # Update info label
+            total_size = sum(f.stat().st_size for f in image_files) / (1024 * 1024)  # MB
+            self.photo_info_label.configure(
+                text=f"Found {len(image_files)} images, Total size: {total_size:.1f} MB"
+            )
+            
+            # Load thumbnails (limit to first 20 for performance)
+            max_thumbnails = 20
+            display_files = image_files[:max_thumbnails]
+            
+            if len(image_files) > max_thumbnails:
+                self.photo_info_label.configure(
+                    text=f"Showing {max_thumbnails} of {len(image_files)} images, Total size: {total_size:.1f} MB"
+                )
+            
+            # Create thumbnails in a grid
+            cols = 4
+            for i, image_file in enumerate(display_files):
+                row = i // cols
+                col = i % cols
+                
+                try:
+                    # Load and resize image
+                    with Image.open(image_file) as img:
+                        # Create thumbnail
+                        img.thumbnail((150, 150), Image.Resampling.LANCZOS)
+                        
+                        # Convert to PhotoImage
+                        photo = ImageTk.PhotoImage(img)
+                        
+                        # Create frame for thumbnail
+                        thumb_frame = ctk.CTkFrame(self.thumbnails_frame)
+                        thumb_frame.grid(row=row, column=col, padx=5, pady=5, sticky="nsew")
+                        
+                        # Create label with image
+                        img_label = ctk.CTkLabel(
+                            thumb_frame,
+                            image=photo,
+                            text="",
+                        )
+                        img_label.grid(row=0, column=0, padx=5, pady=5)
+                        
+                        # Create filename label
+                        name_label = ctk.CTkLabel(
+                            thumb_frame,
+                            text=image_file.name[:15] + "..." if len(image_file.name) > 15 else image_file.name,
+                            font=ctk.CTkFont(size=10)
+                        )
+                        name_label.grid(row=1, column=0, padx=5, pady=(0, 5))
+                        
+                        # Keep reference to prevent garbage collection
+                        self.photo_thumbnails.append(photo)
+                        self.current_photos.append(image_file)
+                        
+                        # Add click handler to show full size
+                        img_label.bind("<Button-1>", lambda e, path=image_file: self.show_full_image(path))
+                        
+                except Exception as e:
+                    print(f"Error loading thumbnail for {image_file.name}: {e}")
+                    # Create error placeholder
+                    thumb_frame = ctk.CTkFrame(self.thumbnails_frame)
+                    thumb_frame.grid(row=row, column=col, padx=5, pady=5, sticky="nsew")
+                    
+                    error_label = ctk.CTkLabel(
+                        thumb_frame,
+                        text="Error\nloading\nimage",
+                        font=ctk.CTkFont(size=10)
+                    )
+                    error_label.grid(row=0, column=0, padx=5, pady=5)
+                    
+        except Exception as e:
+            self.photo_info_label.configure(text=f"Error loading photos: {str(e)}")
+            print(f"Error in load_photo_preview: {e}")
+    
+    def show_full_image(self, image_path):
+        """Show full size image in a popup window"""
+        try:
+            # Create new window
+            popup = ctk.CTkToplevel(self.root)
+            popup.title(f"Image Viewer - {image_path.name}")
+            popup.geometry("800x600")
+            
+            # Load and display image
+            with Image.open(image_path) as img:
+                # Calculate size to fit window while maintaining aspect ratio
+                display_size = (750, 550)
+                img.thumbnail(display_size, Image.Resampling.LANCZOS)
+                
+                photo = ImageTk.PhotoImage(img)
+                
+                # Create and pack image label
+                img_label = ctk.CTkLabel(popup, image=photo, text="")
+                img_label.pack(expand=True, fill="both", padx=10, pady=10)
+                
+                # Info label
+                file_size = image_path.stat().st_size / (1024 * 1024)  # MB
+                info_text = f"File: {image_path.name}\nSize: {file_size:.2f} MB\nDimensions: {img.size[0]}x{img.size[1]}"
+                
+                info_label = ctk.CTkLabel(popup, text=info_text)
+                info_label.pack(pady=5)
+                
+                # Keep reference to prevent garbage collection
+                popup.photo = photo
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not display image: {str(e)}")
         
     def validate_settings(self):
         """Validate current settings"""
