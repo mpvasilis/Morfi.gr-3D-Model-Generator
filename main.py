@@ -19,6 +19,7 @@ from typing import Dict, List, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 import argparse
+from database import ProcessingDatabase
 
 class PhotogrammetryAutomator:
     def __init__(self, 
@@ -27,6 +28,7 @@ class PhotogrammetryAutomator:
                  software_exe: str,
                  software_type: str = "auto",
                  checkpoint_file: str = "processing_checkpoint.json",
+                 database_file: str = "processing_database.db",
                  min_images: int = 300,
                  queue_check_interval: int = 300,
                  enable_exposure_correction: bool = True,
@@ -42,7 +44,8 @@ class PhotogrammetryAutomator:
             output_dir: Directory where 3D models will be saved
             software_exe: Path to RealityCapture.exe or RealityScan.exe
             software_type: "realitycapture", "realityscan", or "auto" for detection
-            checkpoint_file: File to store processing progress
+            checkpoint_file: File to store processing progress (legacy)
+            database_file: SQLite database file to track processing status
             min_images: Minimum number of images required to process a directory
             queue_check_interval: Time in seconds between queue checks
             enable_exposure_correction: Whether to apply exposure correction
@@ -55,6 +58,7 @@ class PhotogrammetryAutomator:
         self.output_dir = Path(output_dir)
         self.software_exe = software_exe
         self.checkpoint_file = checkpoint_file
+        self.database_file = database_file
         self.min_images = min_images
         self.queue_check_interval = queue_check_interval
         self.enable_exposure_correction = enable_exposure_correction
@@ -86,8 +90,14 @@ class PhotogrammetryAutomator:
         if self.enable_exposure_correction:
             self.test_imagemagick()
         
-        # Load checkpoint data
+        # Initialize database
+        self.db = ProcessingDatabase(self.database_file)
+        
+        # Load checkpoint data (legacy support)
         self.checkpoint_data = self.load_checkpoint()
+        
+        # Migrate checkpoint data to database if needed
+        self.migrate_checkpoint_to_database()
         
         # Queue for directories with insufficient images
         self.pending_queue = []
@@ -129,6 +139,58 @@ class PhotogrammetryAutomator:
             'exposure_corrected': [],  # Directories that have had exposure correction applied
             'last_updated': None
         }
+    
+    def migrate_checkpoint_to_database(self):
+        """Migrate existing checkpoint data to database"""
+        if not self.checkpoint_data:
+            return
+            
+        try:
+            processed = self.checkpoint_data.get('processed', [])
+            failed = self.checkpoint_data.get('failed', [])
+            queued = self.checkpoint_data.get('queued', [])
+            
+            # Skip migration if already done
+            if not processed and not failed and not queued:
+                return
+                
+            # Migrate processed directories  
+            for dir_name in processed:
+                try:
+                    self.db.add_directory(dir_name, "", 0)  # Path will be updated when discovered
+                    self.db.update_directory_status(dir_name, 'completed')
+                except Exception:
+                    pass  # Directory might already exist
+                    
+            # Migrate failed directories
+            for dir_name in failed:
+                try:
+                    self.db.add_directory(dir_name, "", 0)
+                    self.db.update_directory_status(dir_name, 'failed', "Migrated from checkpoint")
+                except Exception:
+                    pass
+                    
+            # Migrate queued directories
+            for dir_name in queued:
+                try:
+                    self.db.add_directory(dir_name, "", 0)
+                    self.db.update_directory_status(dir_name, 'queued')
+                except Exception:
+                    pass
+                    
+            self.logger.info(f"Migrated {len(processed)} processed, {len(failed)} failed, {len(queued)} queued directories to database")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to migrate checkpoint data: {e}")
+    
+    def save_checkpoint(self):
+        """Save current progress to checkpoint file (legacy support)"""
+        self.checkpoint_data['last_updated'] = datetime.now().isoformat()
+        try:
+            with open(self.checkpoint_file, 'w') as f:
+                json.dump(self.checkpoint_data, f, indent=2)
+        except Exception as e:
+            self.logger.error(f"Failed to save checkpoint: {e}")
     
     def test_imagemagick(self):
         """Test if ImageMagick is available and working"""
@@ -625,10 +687,19 @@ class PhotogrammetryAutomator:
                 if has_images:
                     is_ready, image_count = self.check_directory_ready(item)
                     
+                    # Register directory in database
+                    self.db.add_directory(item.name, str(item), image_count)
+                    
+                    # Check if already completed
+                    completed_dirs = [d['name'] for d in self.db.get_completed_directories()]
+                    if item.name in completed_dirs or item.name in self.checkpoint_data['processed']:
+                        continue  # Skip already processed directories
+                    
                     if is_ready:
                         ready_directories.append(item)
                     else:
                         pending_directories.append(item)
+                        self.db.update_directory_status(item.name, 'queued')
                         self.update_queue_status(item)
         
         return sorted(ready_directories), sorted(pending_directories)
@@ -816,8 +887,10 @@ class PhotogrammetryAutomator:
         """Process a single directory"""
         dir_name = photo_dir.name
         
-        # Check if already processed
-        if dir_name in self.checkpoint_data['processed']:
+        # Check database first, then fall back to checkpoint
+        completed_dirs = [d['name'] for d in self.db.get_completed_directories()]
+        if (dir_name in completed_dirs or 
+            dir_name in self.checkpoint_data['processed']):
             self.logger.info(f"Skipping {dir_name} (already processed)")
             return True
         
@@ -825,8 +898,17 @@ class PhotogrammetryAutomator:
         is_ready, image_count = self.check_directory_ready(photo_dir)
         if not is_ready:
             self.logger.warning(f"Directory {dir_name} no longer meets minimum image requirement ({image_count} < {self.min_images})")
+            # Add to database as queued
+            self.db.add_directory(dir_name, str(photo_dir), image_count)
+            self.db.update_directory_status(dir_name, 'queued')
             self.update_queue_status(photo_dir)
             return False
+        
+        # Add directory to database as processing
+        self.db.add_directory(dir_name, str(photo_dir), image_count)
+        self.db.update_directory_status(dir_name, 'processing')
+        
+        start_time = time.time()
         
         # Apply exposure correction if enabled (now using parallel processing)
         try:
@@ -851,11 +933,20 @@ class PhotogrammetryAutomator:
             self.logger.error(f"Unknown software type: {self.software_type}")
             success = False
         
-        # Update checkpoint
+        # Calculate processing time
+        processing_time = int(time.time() - start_time)
+        
+        # Update database and checkpoint
         if success:
+            self.db.update_directory_status(dir_name, 'completed', 
+                                           processing_time=processing_time,
+                                           has_exposure_correction=self.enable_exposure_correction)
             self.checkpoint_data['processed'].append(dir_name)
-            self.logger.info(f"[SUCCESS] Successfully processed {dir_name}")
+            self.logger.info(f"[SUCCESS] Successfully processed {dir_name} in {processing_time}s")
         else:
+            self.db.update_directory_status(dir_name, 'failed', 
+                                           error_message="Processing failed",
+                                           processing_time=processing_time)
             self.checkpoint_data['failed'].append(dir_name)
             self.logger.error(f"[FAILED] Failed to process {dir_name}")
         
@@ -987,6 +1078,8 @@ def main():
                        default='auto', help='Software type (default: auto-detect)')
     parser.add_argument('--checkpoint', default='processing_checkpoint.json', 
                        help='Checkpoint file path (default: processing_checkpoint.json)')
+    parser.add_argument('--database', default='processing_database.db',
+                       help='Database file path (default: processing_database.db)')
     parser.add_argument('--min-images', type=int, default=300,
                        help='Minimum number of images required (default: 300)')
     parser.add_argument('--queue-interval', type=int, default=300,
@@ -1040,6 +1133,7 @@ def main():
         software_exe=args.software_exe,
         software_type=args.software_type,
         checkpoint_file=args.checkpoint,
+        database_file=args.database,
         min_images=args.min_images,
         queue_check_interval=args.queue_interval,
         enable_exposure_correction=not args.disable_exposure_correction,

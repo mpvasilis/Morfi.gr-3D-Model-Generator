@@ -1,0 +1,15 @@
+{
+  "input_dir": "C:/Users/Balafas/Downloads/logo_morfi_finals/logo_morfi_hat",
+  "output_dir": "",
+  "software_exe": "",
+  "software_type": "auto",
+  "min_images": 300,
+  "queue_interval": 300,
+  "enable_exposure_correction": true,
+  "imagemagick_path": "magick",
+  "exposure_adjustment": -0.5,
+  "keep_originals": true,
+  "max_workers": 4,
+  "checkpoint_file": "processing_checkpoint.json",
+  "database_file": "processing_database.db"
+}
